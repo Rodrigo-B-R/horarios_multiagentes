@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# artefactos generados por la simulacion
+*.mp4
+*.png

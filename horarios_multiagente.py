@@ -1,0 +1,351 @@
+"""
+Sistema multiagente de coordinacion de horarios entre companeros de equipo.
+
+Modelo:
+    U_i(h) = w1*P_i + w2*Q_i - w3*C_i - w4*R_i - w5*D_i
+    J = sum(U_i) - lambda * Var(U_1, ..., U_N)
+
+Restricciones:
+    - Tiempo total <= T_max
+    - Precedencia entre bloques (tareas antes de reuniones dependientes)
+    - Exclusion mutua de recursos compartidos (sala, zoom, ...)
+    - Disponibilidad individual (sin traslapes por agente, ni con compromisos duros)
+"""
+
+from __future__ import annotations
+
+import itertools
+import statistics
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
+DIAS = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes"]
+
+Intervalo = Tuple[int, float, float]  # (dia, inicio, fin)
+
+
+def se_traslapan(dia1: int, i1: float, f1: float, dia2: int, i2: float, f2: float) -> bool:
+    return dia1 == dia2 and i1 < f2 and i2 < f1
+
+
+# ---------------------------------------------------------------------------
+# Bloque de tiempo candidato
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Bloque:
+    id: str
+    nombre: str
+    dia: int  # indice sobre DIAS
+    inicio: float
+    fin: float
+    participantes: List[str]
+    recurso: Optional[str] = None  # ej. "sala", "zoom"
+    precedencias: List[str] = field(default_factory=list)  # ids de bloques requeridos antes
+    prioridad_base: float = 3.0
+    beneficio_base: float = 3.0
+    prioridad_por_agente: Dict[str, float] = field(default_factory=dict)
+    beneficio_por_agente: Dict[str, float] = field(default_factory=dict)
+
+    @property
+    def duracion(self) -> float:
+        return self.fin - self.inicio
+
+    def prioridad(self, agente_id: str) -> float:
+        return self.prioridad_por_agente.get(agente_id, self.prioridad_base)
+
+    def beneficio(self, agente_id: str) -> float:
+        return self.beneficio_por_agente.get(agente_id, self.beneficio_base)
+
+    def __repr__(self):
+        return f"{self.id}:{self.nombre} ({DIAS[self.dia]} {self.inicio:.1f}-{self.fin:.1f}h)"
+
+
+# ---------------------------------------------------------------------------
+# Agente
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Agente:
+    id: str
+    nombre: str
+    ocupado_duro: List[Intervalo] = field(default_factory=list)   # compromisos fijos, no negociables
+    ocupado_blando: List[Intervalo] = field(default_factory=list)  # compromisos movibles (generan costo C)
+    w1: float = 1.0  # peso prioridad
+    w2: float = 1.0  # peso beneficio esperado
+    w3: float = 0.5  # peso costo de mover otras cosas
+    w4: float = 2.0  # peso riesgo de choque
+    w5: float = 0.2  # peso duracion
+
+    def calcular_utilidad(self, bloque: Bloque) -> float:
+        if self.id not in bloque.participantes:
+            return 0.0
+
+        P = bloque.prioridad(self.id)
+        Q = bloque.beneficio(self.id)
+
+        C = sum(
+            1 for (d, i, f) in self.ocupado_blando
+            if se_traslapan(d, i, f, bloque.dia, bloque.inicio, bloque.fin)
+        )
+
+        R = 1.0 if any(
+            se_traslapan(d, i, f, bloque.dia, bloque.inicio, bloque.fin)
+            for (d, i, f) in self.ocupado_duro
+        ) else 0.0
+
+        D = bloque.duracion
+
+        return self.w1 * P + self.w2 * Q - self.w3 * C - self.w4 * R - self.w5 * D
+
+
+# ---------------------------------------------------------------------------
+# Sistema multiagente
+# ---------------------------------------------------------------------------
+
+class SistemaMultiagente:
+    def __init__(self, agentes: List[Agente], bloques: List[Bloque],
+                 T_max: Optional[float] = None, lam: float = 0.5):
+        self.agentes = {a.id: a for a in agentes}
+        self.bloques = {b.id: b for b in bloques}
+        self.T_max = T_max
+        self.lam = lam
+
+    # -- utilidades ---------------------------------------------------
+
+    def evaluar_utilidades(self) -> Dict[str, Dict[str, float]]:
+        """Utilidad de cada bloque para cada agente participante."""
+        return {
+            b.id: {
+                a.id: a.calcular_utilidad(b)
+                for a in self.agentes.values() if a.id in b.participantes
+            }
+            for b in self.bloques.values()
+        }
+
+    def utilidad_por_agente(self, seleccion: List[Bloque]) -> Dict[str, float]:
+        utilidades = {a_id: 0.0 for a_id in self.agentes}
+        for b in seleccion:
+            for a_id in b.participantes:
+                utilidades[a_id] += self.agentes[a_id].calcular_utilidad(b)
+        return utilidades
+
+    def utilidad_social(self, seleccion: List[Bloque], lam: Optional[float] = None) -> Tuple[float, Dict[str, float]]:
+        lam = self.lam if lam is None else lam
+        utilidades = self.utilidad_por_agente(seleccion)
+        valores = list(utilidades.values())
+        varianza = statistics.pvariance(valores) if len(valores) > 1 else 0.0
+        J = sum(valores) - lam * varianza
+        return J, utilidades
+
+    # -- restricciones --------------------------------------------------
+
+    def es_factible(self, seleccion: List[Bloque]) -> bool:
+        # Tiempo total
+        if self.T_max is not None:
+            if sum(b.duracion for b in seleccion) > self.T_max:
+                return False
+
+        ids_seleccionados = {b.id for b in seleccion}
+
+        # Precedencia: el bloque requerido debe estar seleccionado y terminar antes
+        for b in seleccion:
+            for prec_id in b.precedencias:
+                if prec_id not in ids_seleccionados:
+                    return False
+                prec = self.bloques[prec_id]
+                fin_prec = prec.dia * 24 + prec.fin
+                inicio_b = b.dia * 24 + b.inicio
+                if fin_prec > inicio_b:
+                    return False
+
+        # Exclusion mutua de recursos compartidos
+        for b1, b2 in itertools.combinations(seleccion, 2):
+            if b1.recurso is not None and b1.recurso == b2.recurso:
+                if se_traslapan(b1.dia, b1.inicio, b1.fin, b2.dia, b2.inicio, b2.fin):
+                    return False
+
+        # Disponibilidad individual: sin traslapes por agente ni con compromisos duros
+        for a_id, agente in self.agentes.items():
+            bloques_agente = [b for b in seleccion if a_id in b.participantes]
+            for b1, b2 in itertools.combinations(bloques_agente, 2):
+                if se_traslapan(b1.dia, b1.inicio, b1.fin, b2.dia, b2.inicio, b2.fin):
+                    return False
+            for b in bloques_agente:
+                for (d, i, f) in agente.ocupado_duro:
+                    if se_traslapan(d, i, f, b.dia, b.inicio, b.fin):
+                        return False
+
+        return True
+
+    # -- seleccion --------------------------------------------------
+
+    def seleccionar_optimo(self, lam: Optional[float] = None) -> Tuple[List[Bloque], float, Dict[str, float]]:
+        """Fuerza bruta sobre subconjuntos de bloques candidatos (ok para pocos bloques)."""
+        lam = self.lam if lam is None else lam
+        bloques = list(self.bloques.values())
+        mejor_seleccion: List[Bloque] = []
+        mejor_J = float("-inf")
+        mejor_utilidades: Dict[str, float] = {}
+
+        for r in range(len(bloques), -1, -1):
+            pass  # no-op, iteramos todos los subconjuntos abajo sin importar tamano
+
+        for mascara in range(2 ** len(bloques)):
+            subset = [b for i, b in enumerate(bloques) if mascara & (1 << i)]
+            if not self.es_factible(subset):
+                continue
+            J, utilidades = self.utilidad_social(subset, lam=lam)
+            if J > mejor_J:
+                mejor_J = J
+                mejor_seleccion = subset
+                mejor_utilidades = utilidades
+
+        return mejor_seleccion, mejor_J, mejor_utilidades
+
+    # -- bonus: replanificacion ante eventos inesperados --------------
+
+    def registrar_cancelacion(self, agente_id: str, nuevo_ocupado_duro: Intervalo) -> None:
+        """Un agente cambia disponibilidad (ej. se le cruza algo urgente)."""
+        self.agentes[agente_id].ocupado_duro.append(nuevo_ocupado_duro)
+
+    def replanificar(self, agente_id: str, nuevo_ocupado_duro: Intervalo,
+                      lam: Optional[float] = None) -> Tuple[List[Bloque], float, Dict[str, float]]:
+        self.registrar_cancelacion(agente_id, nuevo_ocupado_duro)
+        return self.seleccionar_optimo(lam=lam)
+
+
+# ---------------------------------------------------------------------------
+# Simulacion de ejemplo
+# ---------------------------------------------------------------------------
+
+def construir_caso_ejemplo() -> Tuple[List[Agente], List[Bloque]]:
+    agentes = [
+        Agente("A1", "Ana", ocupado_duro=[(0, 8, 9)], ocupado_blando=[(1, 10, 11)]),
+        Agente("A2", "Bruno", ocupado_duro=[(1, 15, 17)], ocupado_blando=[]),
+        Agente("A3", "Carla", ocupado_duro=[], ocupado_blando=[(0, 13, 14), (2, 9, 10)]),
+        Agente("A4", "Diego", ocupado_duro=[(2, 8, 10)], ocupado_blando=[]),
+    ]
+
+    bloques = [
+        Bloque("B1", "Diseno de API (tarea)", dia=0, inicio=10, fin=12,
+               participantes=["A1", "A3"], recurso=None,
+               prioridad_base=4, beneficio_base=3),
+        Bloque("B2", "Revision de API (reunion)", dia=0, inicio=13, fin=14,
+               participantes=["A1", "A2", "A3"], recurso="sala",
+               precedencias=["B1"], prioridad_base=4, beneficio_base=4),
+        Bloque("B3", "Sync semanal", dia=1, inicio=9, fin=10,
+               participantes=["A1", "A2", "A3", "A4"], recurso="zoom",
+               prioridad_base=3, beneficio_base=3),
+        Bloque("B4", "Pair programming", dia=1, inicio=11, fin=13,
+               participantes=["A2", "A4"], recurso=None,
+               prioridad_base=2, beneficio_base=4),
+        Bloque("B5", "Demo a cliente", dia=2, inicio=11, fin=12,
+               participantes=["A1", "A2", "A4"], recurso="sala",
+               prioridad_base=5, beneficio_base=5),
+        Bloque("B6", "Retro de sprint", dia=2, inicio=15, fin=16,
+               participantes=["A1", "A2", "A3", "A4"], recurso="zoom",
+               prioridad_base=3, beneficio_base=2),
+        Bloque("B7", "1:1 mentoria", dia=3, inicio=9, fin=9.5,
+               participantes=["A3", "A4"], recurso=None,
+               prioridad_base=2, beneficio_base=3),
+        Bloque("B8", "Planning siguiente sprint", dia=3, inicio=14, fin=15.5,
+               participantes=["A1", "A2", "A3", "A4"], recurso="sala",
+               prioridad_base=4, beneficio_base=3),
+    ]
+
+    return agentes, bloques
+
+
+def imprimir_seleccion(sistema: SistemaMultiagente, titulo: str,
+                        seleccion: List[Bloque], J: float, utilidades: Dict[str, float]) -> None:
+    print(f"\n=== {titulo} ===")
+    print(f"J (utilidad social) = {J:.3f}")
+    print("Bloques seleccionados:")
+    for b in sorted(seleccion, key=lambda x: (x.dia, x.inicio)):
+        print(f"  - {b}  [participantes: {', '.join(b.participantes)}]"
+              f"{'  recurso=' + b.recurso if b.recurso else ''}")
+    print("Utilidad por agente:")
+    for a_id, u in utilidades.items():
+        print(f"  - {sistema.agentes[a_id].nombre}: {u:.3f}")
+    var = statistics.pvariance(list(utilidades.values())) if len(utilidades) > 1 else 0.0
+    print(f"Varianza entre agentes: {var:.3f}")
+
+
+def graficar_resultados(sistema: SistemaMultiagente,
+                         seleccion_lam: List[Bloque], util_lam: Dict[str, float], J_lam: float,
+                         seleccion_sin_lam: List[Bloque], util_sin_lam: Dict[str, float], J_sin_lam: float) -> None:
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+
+    # 1) Utilidad por agente, con y sin penalizacion por varianza
+    ax = axes[0]
+    nombres = [sistema.agentes[a_id].nombre for a_id in util_lam]
+    x = range(len(nombres))
+    ancho = 0.35
+    ax.bar([i - ancho / 2 for i in x], list(util_sin_lam.values()), width=ancho, label="lambda=0")
+    ax.bar([i + ancho / 2 for i in x], list(util_lam.values()), width=ancho, label=f"lambda={sistema.lam}")
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(nombres)
+    ax.set_ylabel("Utilidad U_i")
+    ax.set_title("Utilidad por agente")
+    ax.legend()
+
+    # 2) Utilidad social J comparada
+    ax = axes[1]
+    ax.bar(["lambda=0", f"lambda={sistema.lam}"], [J_sin_lam, J_lam], color=["tab:blue", "tab:orange"])
+    ax.set_ylabel("J")
+    ax.set_title("Utilidad social J: efecto de la penalizacion por varianza")
+
+    # 3) Horario final asignado (con lambda>0) como diagrama de bloques
+    ax = axes[2]
+    colores = plt.cm.tab10.colors
+    color_por_bloque = {b.id: colores[i % len(colores)] for i, b in enumerate(sistema.bloques.values())}
+    for b in seleccion_lam:
+        ax.barh(y=DIAS[b.dia], width=b.duracion, left=b.inicio, height=0.5,
+                color=color_por_bloque[b.id], edgecolor="black")
+        ax.text(b.inicio + b.duracion / 2, DIAS[b.dia], b.id, ha="center", va="center", fontsize=8)
+    ax.set_xlabel("Hora del dia")
+    ax.set_title(f"Horario final asignado (lambda={sistema.lam})")
+    ax.set_xlim(7, 18)
+    ax.invert_yaxis()
+
+    fig.tight_layout()
+    fig.savefig("horario_resultado.png", dpi=150)
+    print("\nGrafico guardado en horario_resultado.png")
+    plt.show()
+
+
+def simular():
+    agentes, bloques = construir_caso_ejemplo()
+    sistema = SistemaMultiagente(agentes, bloques, T_max=7.0, lam=2.5)
+
+    print("Utilidad de cada bloque para cada agente participante:")
+    utilidades_bloques = sistema.evaluar_utilidades()
+    for b_id, utils in utilidades_bloques.items():
+        legibles = ", ".join(f"{sistema.agentes[a].nombre}={u:.2f}" for a, u in utils.items())
+        print(f"  {b_id} ({sistema.bloques[b_id].nombre}): {legibles}")
+
+    # Seleccion optima con penalizacion por varianza (equidad)
+    seleccion_lam, J_lam, util_lam = sistema.seleccionar_optimo(lam=sistema.lam)
+    imprimir_seleccion(sistema, f"Seleccion optima (lambda={sistema.lam}, con equidad)", seleccion_lam, J_lam, util_lam)
+
+    # Bonus: comparacion lambda=0 vs lambda>0
+    seleccion_sin_lam, J_sin_lam, util_sin_lam = sistema.seleccionar_optimo(lam=0.0)
+    imprimir_seleccion(sistema, "Seleccion optima (lambda=0, sin equidad)", seleccion_sin_lam, J_sin_lam, util_sin_lam)
+
+    # Bonus: evento inesperado -> Diego cancela y queda ocupado el jueves 14-16h
+    print("\n>>> Evento inesperado: Diego (A4) queda ocupado el Jueves 14:00-16:00h, se replanifica...")
+    seleccion_repl, J_repl, util_repl = sistema.replanificar("A4", (3, 14, 16), lam=sistema.lam)
+    imprimir_seleccion(sistema, "Replanificacion tras evento inesperado", seleccion_repl, J_repl, util_repl)
+
+    try:
+        graficar_resultados(sistema, seleccion_lam, util_lam, J_lam,
+                             seleccion_sin_lam, util_sin_lam, J_sin_lam)
+    except ImportError:
+        print("\n(matplotlib no disponible: se omiten los graficos)")
+
+
+if __name__ == "__main__":
+    simular()
