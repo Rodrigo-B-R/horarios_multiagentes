@@ -355,6 +355,80 @@ cells.append(nbf.v4.new_code_cell(
 """Video(salida_mp4, embed=True, width=900)"""
 ))
 
+cells.append(nbf.v4.new_markdown_cell(
+"## 7. Animacion del horario segun Q-Learning (maximo local) vs. el optimo\\n\\n"
+"El video anterior anima el **optimo global** encontrado por fuerza bruta. "
+"Aqui se anima, de la misma forma, la **politica aprendida por Q-Learning** "
+"-- un maximo local: se queda corta frente al optimo, pero se puede ver en "
+"que difiere: que bloques omite o cambia, y como eso se refleja en la "
+"utilidad acumulada de cada companero. Se guarda como `horario_qlearning.mp4`."
+))
+
+cells.append(nbf.v4.new_code_cell(
+"""orden_ql = sorted(seleccion_ql, key=lambda b: (b.dia, b.inicio))
+color_por_bloque_ql = {b.id: colores[i % len(colores)] for i, b in enumerate(orden_ql)}
+techo_util = max(max(util_lam.values()), max(util_ql.values())) * 1.15
+
+fig, (ax_bar, ax_sched) = plt.subplots(1, 2, figsize=(13, 5))
+fig.suptitle(f"Construccion del horario segun Q-Learning (J={J_ql:.1f}, optimo J={J_lam:.1f})")
+
+def dibujar_frame(k):
+    ax_bar.clear()
+    ax_sched.clear()
+
+    parciales = orden_ql[:k]
+    util_parcial = sistema.utilidad_por_agente(parciales)
+    valores = [util_parcial[a_id] for a_id in ids_agentes]
+
+    ax_bar.bar(nombres_agentes, valores, color="tab:orange")
+    ax_bar.set_ylim(0, techo_util)
+    ax_bar.set_ylabel("Utilidad acumulada U_i")
+    ax_bar.set_title(f"Bloques asignados: {k}/{len(orden_ql)}")
+
+    for b in parciales:
+        ax_sched.barh(y=DIAS[b.dia], width=b.duracion, left=b.inicio, height=0.5,
+                       color=color_por_bloque_ql[b.id], edgecolor="black")
+        ax_sched.text(b.inicio + b.duracion / 2, DIAS[b.dia], b.id,
+                       ha="center", va="center", fontsize=8)
+    ax_sched.set_xlim(7, 18)
+    ax_sched.set_yticks(range(len(DIAS)))
+    ax_sched.set_yticklabels(DIAS)
+    ax_sched.invert_yaxis()
+    ax_sched.set_xlabel("Hora del dia")
+    ax_sched.set_title("Horario semanal (Q-Learning)")
+
+n_frames = len(orden_ql) + 1
+frames = list(range(n_frames)) + [n_frames - 1] * 8
+
+ani = animation.FuncAnimation(fig, dibujar_frame, frames=frames, interval=600, repeat=False)
+
+writer = animation.FFMpegWriter(fps=2, bitrate=1800)
+salida_ql_mp4 = "horario_qlearning.mp4"
+ani.save(salida_ql_mp4, writer=writer)
+plt.close(fig)
+print(f"Animacion guardada en {salida_ql_mp4}")"""
+))
+
+cells.append(nbf.v4.new_code_cell(
+"""Video(salida_ql_mp4, embed=True, width=900)"""
+))
+
+cells.append(nbf.v4.new_markdown_cell(
+"### 7.1 Diferencia entre ambas soluciones\\n\\n"
+"Que bloques elige uno y no el otro."
+))
+
+cells.append(nbf.v4.new_code_cell(
+"""ids_lam = {b.id for b in seleccion_lam}
+ids_ql = {b.id for b in seleccion_ql}
+
+print(f"Solo en el optimo (fuerza bruta):  {sorted(ids_lam - ids_ql)}")
+print(f"Solo en Q-Learning:                {sorted(ids_ql - ids_lam)}")
+print(f"En ambos:                          {sorted(ids_lam & ids_ql)}")
+print(f"\\nJ optimo = {J_lam:.2f}   J Q-Learning = {J_ql:.2f}   "
+      f"brecha = {J_lam - J_ql:.2f} ({(J_lam - J_ql) / J_lam:.1%} por debajo del optimo)")"""
+))
+
 nb['cells'] = cells
 nb['metadata'] = {
     "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
