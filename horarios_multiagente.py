@@ -15,9 +15,10 @@ Restricciones:
 from __future__ import annotations
 
 import itertools
+import random
 import statistics
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 DIAS = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes"]
 
@@ -216,6 +217,126 @@ class SistemaMultiagente:
 
 
 # ---------------------------------------------------------------------------
+# Q-Learning: seleccion de bloques como MDP episodico (Algoritmo 3 del reto)
+# ---------------------------------------------------------------------------
+
+Estado = Tuple[int, FrozenSet[str]]  # (paso en el orden de bloques, ids ya incluidos)
+
+
+class QLearningPlanner:
+    """Aprende, via Q-Learning tabular con politica epsilon-greedy, que
+    subconjunto de bloques seleccionar.
+
+    Cada episodio recorre los bloques candidatos en un orden fijo; en cada
+    paso la accion es "incluir" (1) o "excluir" (0) el bloque actual, y solo
+    se permite incluirlo si la seleccion resultante sigue siendo factible
+    (ver SistemaMultiagente.es_factible). La recompensa es 0 en cada paso
+    intermedio y J (la utilidad social del bloque 5) solo al terminar el
+    episodio, sobre la seleccion final -- por eso el valor de una accion
+    temprana depende del retorno futuro descontado, tal como en la ecuacion
+    de Bellman (bloque 9).
+
+    Sirve como alternativa a seleccionar_optimo(): en vez de enumerar los
+    2**n subconjuntos por fuerza bruta, aprende una politica por experiencia,
+    lo cual escala a instancias con muchos mas bloques candidatos.
+    """
+
+    def __init__(self, sistema: SistemaMultiagente, alpha: float = 0.1,
+                 gamma: float = 0.95, epsilon: float = 1.0, epsilon_min: float = 0.05,
+                 epsilon_decay: float = 0.999,
+                 lam: Optional[float] = None, semilla: Optional[int] = None):
+        self.sistema = sistema
+        self.alpha = alpha
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.epsilon_min = epsilon_min
+        self.epsilon_decay = epsilon_decay
+        self.lam = sistema.lam if lam is None else lam
+        self.orden: List[str] = list(sistema.bloques.keys())
+        self.Q: Dict[Estado, Dict[int, float]] = {}
+        self.rng = random.Random(semilla)
+        self.historial_J: List[float] = []
+        self.historial_epsilon: List[float] = []
+        self.historial_td_error: List[float] = []
+
+    def _q(self, estado: Estado) -> Dict[int, float]:
+        return self.Q.setdefault(estado, {0: 0.0, 1: 0.0})
+
+    def _incluir_es_factible(self, seleccion_ids: FrozenSet[str], bloque_id: str) -> bool:
+        candidato = [self.sistema.bloques[i] for i in seleccion_ids | {bloque_id}]
+        return self.sistema.es_factible(candidato)
+
+    def _elegir_accion(self, estado: Estado, acciones_validas: List[int], explorar: bool) -> int:
+        if explorar and self.rng.random() < self.epsilon:
+            return self.rng.choice(acciones_validas)
+        q = self._q(estado)
+        return max(acciones_validas, key=lambda a: q[a])
+
+    def ejecutar_episodio(self, explorar: bool = True) -> Tuple[float, Dict[str, float], List[Bloque], float]:
+        """Corre un episodio completo. Si explorar=True actualiza Q siguiendo
+        el Algoritmo 3 (observar, actuar epsilon-greedy, actualizar Q); si es
+        False corre la politica greedy pura, sin aprender (para evaluar).
+        Devuelve tambien el error TD |delta| promedio del episodio (0 si no
+        se exploro/actualizo), como medida de cuanto sigue "sorprendiendose"
+        el agente."""
+        seleccion_ids: FrozenSet[str] = frozenset()
+        total_pasos = len(self.orden)
+        J, utilidades = 0.0, {}
+        deltas: List[float] = []
+
+        for paso, bloque_id in enumerate(self.orden):
+            estado: Estado = (paso, seleccion_ids)
+            acciones_validas = [0]
+            if self._incluir_es_factible(seleccion_ids, bloque_id):
+                acciones_validas.append(1)
+
+            accion = self._elegir_accion(estado, acciones_validas, explorar)
+            nueva_seleccion = seleccion_ids | {bloque_id} if accion == 1 else seleccion_ids
+            estado_sig: Estado = (paso + 1, nueva_seleccion)
+            es_terminal = (paso + 1) == total_pasos
+
+            if es_terminal:
+                bloques_finales = [self.sistema.bloques[i] for i in nueva_seleccion]
+                J, utilidades = self.sistema.utilidad_social(bloques_finales, lam=self.lam)
+                r = J
+            else:
+                r = 0.0
+
+            if explorar:
+                q = self._q(estado)
+                mejor_futuro = max(self._q(estado_sig).values()) if not es_terminal else 0.0
+                delta = r + self.gamma * mejor_futuro - q[accion]
+                q[accion] += self.alpha * delta
+                deltas.append(abs(delta))
+
+            seleccion_ids = nueva_seleccion
+
+        bloques_finales = [self.sistema.bloques[i] for i in seleccion_ids]
+        td_error_medio = statistics.fmean(deltas) if deltas else 0.0
+        return J, utilidades, bloques_finales, td_error_medio
+
+    def entrenar(self, n_episodios: int = 8000) -> List[float]:
+        """Entrena n_episodios episodios, con epsilon decayendo geometricamente
+        de self.epsilon hasta epsilon_min (mucha exploracion al inicio, casi
+        pura explotacion al final). Devuelve el historial de J por episodio."""
+        self.historial_J = []
+        self.historial_epsilon = []
+        self.historial_td_error = []
+        for _ in range(n_episodios):
+            J, _, _, td_error = self.ejecutar_episodio(explorar=True)
+            self.historial_J.append(J)
+            self.historial_epsilon.append(self.epsilon)
+            self.historial_td_error.append(td_error)
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+        return self.historial_J
+
+    def mejor_politica(self) -> Tuple[List[Bloque], float, Dict[str, float]]:
+        """Corre la politica greedy aprendida (sin exploracion ni aprendizaje)."""
+        J, utilidades, bloques, _ = self.ejecutar_episodio(explorar=False)
+        return bloques, J, utilidades
+
+
+# ---------------------------------------------------------------------------
 # Simulacion de ejemplo
 # ---------------------------------------------------------------------------
 
@@ -339,6 +460,16 @@ def simular():
     print("\n>>> Evento inesperado: Diego (A4) queda ocupado el Jueves 14:00-16:00h, se replanifica...")
     seleccion_repl, J_repl, util_repl = sistema.replanificar("A4", (3, 14, 16), lam=sistema.lam)
     imprimir_seleccion(sistema, "Replanificacion tras evento inesperado", seleccion_repl, J_repl, util_repl)
+
+    # Bonus: Q-Learning como alternativa a la fuerza bruta (Algoritmo 3)
+    print("\n>>> Entrenando Q-Learning (alpha=0.15, gamma=0.95, epsilon: 1.0 -> 0.05) "
+          "para aprender la seleccion de bloques...")
+    planner = QLearningPlanner(sistema, alpha=0.15, gamma=0.95, lam=sistema.lam, semilla=0)
+    historial = planner.entrenar(n_episodios=8000)
+    seleccion_ql, J_ql, util_ql = planner.mejor_politica()
+    imprimir_seleccion(sistema, "Politica aprendida por Q-Learning", seleccion_ql, J_ql, util_ql)
+    print(f"J promedio ultimos 200 episodios de entrenamiento: "
+          f"{statistics.fmean(historial[-200:]):.3f}  (optimo por fuerza bruta: {J_lam:.3f})")
 
     try:
         graficar_resultados(sistema, seleccion_lam, util_lam, J_lam,

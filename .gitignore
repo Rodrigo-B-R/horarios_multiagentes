@@ -6,3 +6,5 @@ __pycache__/
 # artefactos generados por la simulacion
 *.mp4
 *.png
+claude.md
+.pdf
