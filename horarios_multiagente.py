@@ -442,6 +442,36 @@ class AsignadorSubasta:
 
         return resultado, utilidad_total
 
+    # -- linea base: asignacion aleatoria --------------------------------
+
+    def asignar_aleatorio(self, semilla: Optional[int] = None) -> Tuple[Dict[str, str], float]:
+        """Linea base sin ningun mecanismo de coordinacion: las tareas se
+        recorren en orden aleatorio y cada una se le da a un agente
+        candidato elegido al azar entre los que siguen libres (no al mejor
+        postor). Sirve para medir cuanto aporta realmente la subasta, tal
+        como una politica aleatoria sirve de referencia para Q-Learning."""
+        rng = random.Random(semilla)
+        tareas_por_id = {t.id: t for t in self.tareas}
+        orden = list(tareas_por_id.keys())
+        rng.shuffle(orden)
+
+        libres = {a.id: a for a in self.agentes}
+        resultado: Dict[str, str] = {}
+        utilidad_total = 0.0
+
+        for tarea_id in orden:
+            tarea = tareas_por_id[tarea_id]
+            candidatos = [a_id for a_id in libres if a_id in tarea.participantes]
+            if not candidatos:
+                continue
+            ganador_id = rng.choice(candidatos)
+            utilidad = libres[ganador_id].calcular_utilidad(tarea)
+            resultado[ganador_id] = tarea_id
+            utilidad_total += utilidad
+            del libres[ganador_id]
+
+        return resultado, utilidad_total
+
 
 def _hungaro(costo: List[List[float]]) -> List[int]:
     """Algoritmo hungaro (Kuhn-Munkres) O(n^3) sobre una matriz de costo
@@ -493,6 +523,134 @@ def _hungaro(costo: List[List[float]]) -> List[int]:
         if p[j] != 0:
             asignacion_por_fila[p[j] - 1] = j - 1
     return asignacion_por_fila
+
+
+# ---------------------------------------------------------------------------
+# Negociacion y equilibrio de Nash entre dos agentes
+# ---------------------------------------------------------------------------
+
+Estrategia = str
+PerfilEstrategias = Tuple[Estrategia, Estrategia]
+Pago = Tuple[float, float]
+
+
+class JuegoDosAgentes:
+    """Modela una negociacion entre dos agentes como un juego en forma normal:
+    cada agente elige una estrategia de un conjunto finito, y la matriz de
+    pagos da la utilidad de cada uno para cada combinacion de estrategias.
+
+    A diferencia del horario optimo o la subasta (donde un coordinador -- el
+    propio algoritmo -- resuelve el problema completo), aqui no hay
+    coordinador: cada agente decide por su cuenta, anticipando lo que hara
+    el otro. El equilibrio de Nash es el punto donde ningun agente mejora
+    cambiando unilateralmente de estrategia."""
+
+    def __init__(self, agente1_id: str, agente2_id: str,
+                 estrategias1: List[Estrategia], estrategias2: List[Estrategia],
+                 pagos: Dict[PerfilEstrategias, Pago]):
+        self.agente1_id = agente1_id
+        self.agente2_id = agente2_id
+        self.estrategias1 = estrategias1
+        self.estrategias2 = estrategias2
+        self.pagos = pagos
+
+    def mejores_respuestas_1(self, e2: Estrategia) -> List[Estrategia]:
+        """Estrategias del agente 1 que maximizan su pago si el agente 2 juega e2."""
+        valores = {e1: self.pagos[(e1, e2)][0] for e1 in self.estrategias1}
+        mejor = max(valores.values())
+        return [e1 for e1, v in valores.items() if v == mejor]
+
+    def mejores_respuestas_2(self, e1: Estrategia) -> List[Estrategia]:
+        """Estrategias del agente 2 que maximizan su pago si el agente 1 juega e1."""
+        valores = {e2: self.pagos[(e1, e2)][1] for e2 in self.estrategias2}
+        mejor = max(valores.values())
+        return [e2 for e2, v in valores.items() if v == mejor]
+
+    def estrategia_dominante(self, jugador: int) -> Optional[Estrategia]:
+        """La estrategia que es mejor respuesta a TODO lo que haga el rival
+        (estrategia estrictamente dominante), si existe; None si no hay una
+        unica estrategia dominante."""
+        if jugador == 1:
+            candidatas = [e1 for e1 in self.estrategias1
+                          if all(e1 in self.mejores_respuestas_1(e2) for e2 in self.estrategias2)]
+        else:
+            candidatas = [e2 for e2 in self.estrategias2
+                          if all(e2 in self.mejores_respuestas_2(e1) for e1 in self.estrategias1)]
+        return candidatas[0] if len(candidatas) == 1 else None
+
+    def equilibrios_nash_puros(self) -> List[PerfilEstrategias]:
+        """Un perfil (e1, e2) es equilibrio de Nash en estrategias puras si
+        e1 es mejor respuesta a e2 Y e2 es mejor respuesta a e1: ningun
+        agente mejora desviandose unilateralmente."""
+        equilibrios = []
+        for e1 in self.estrategias1:
+            for e2 in self.estrategias2:
+                if e1 in self.mejores_respuestas_1(e2) and e2 in self.mejores_respuestas_2(e1):
+                    equilibrios.append((e1, e2))
+        return equilibrios
+
+    def optimos_pareto(self) -> List[PerfilEstrategias]:
+        """Perfiles donde no existe otro perfil que mejore a ambos agentes (o
+        a uno sin empeorar al otro). Sirve para contrastar el equilibrio de
+        Nash (estable) contra el optimo social (eficiente): no siempre
+        coinciden, y esa brecha es la leccion central de la seccion."""
+        perfiles = [(e1, e2) for e1 in self.estrategias1 for e2 in self.estrategias2]
+        optimos = []
+        for p in perfiles:
+            u1, u2 = self.pagos[p]
+            dominado = any(
+                self.pagos[q][0] >= u1 and self.pagos[q][1] >= u2 and self.pagos[q] != (u1, u2)
+                for q in perfiles
+            )
+            if not dominado:
+                optimos.append(p)
+        return optimos
+
+
+def construir_caso_negociacion(agente1_id: str = "A1", agente2_id: str = "A3") -> JuegoDosAgentes:
+    """Dos companeros deciden si Cooperar en una tarea compartida (ayudarse
+    con la carga de trabajo) o No_cooperar (dejar que el otro cargue con
+    todo). Es un dilema del prisionero: cooperar mutuamente da el mejor
+    resultado conjunto (6, 6), pero cada agente tiene incentivo individual a
+    no cooperar -- si el otro coopera, aprovecharse da mas (8 contra 2) -- y
+    ese incentivo, compartido por ambos, empuja el sistema hacia el
+    equilibrio de Nash (No_cooperar, No_cooperar) con pago (3, 3): peor para
+    los dos que si hubieran cooperado."""
+    pagos = {
+        ("Cooperar", "Cooperar"): (6.0, 6.0),
+        ("Cooperar", "No_cooperar"): (2.0, 8.0),
+        ("No_cooperar", "Cooperar"): (8.0, 2.0),
+        ("No_cooperar", "No_cooperar"): (3.0, 3.0),
+    }
+    return JuegoDosAgentes(agente1_id, agente2_id,
+                            ["Cooperar", "No_cooperar"], ["Cooperar", "No_cooperar"],
+                            pagos)
+
+
+def imprimir_analisis_nash(sistema: "SistemaMultiagente", juego: JuegoDosAgentes) -> None:
+    nombre1 = sistema.agentes[juego.agente1_id].nombre
+    nombre2 = sistema.agentes[juego.agente2_id].nombre
+
+    print(f"\n=== Negociacion entre {nombre1} ({juego.agente1_id}) y {nombre2} ({juego.agente2_id}) ===")
+    print("Matriz de pagos (U1, U2):")
+    for e1 in juego.estrategias1:
+        fila = "  ".join(f"{e2}={juego.pagos[(e1, e2)]}" for e2 in juego.estrategias2)
+        print(f"  {e1}: {fila}")
+
+    dom1 = juego.estrategia_dominante(1)
+    dom2 = juego.estrategia_dominante(2)
+    print(f"Estrategia dominante de {nombre1}: {dom1 or 'ninguna'}")
+    print(f"Estrategia dominante de {nombre2}: {dom2 or 'ninguna'}")
+
+    equilibrios = juego.equilibrios_nash_puros()
+    print(f"Equilibrios de Nash (estrategias puras): {equilibrios}")
+
+    optimos = juego.optimos_pareto()
+    print(f"Optimos de Pareto: {optimos}")
+
+    if equilibrios and optimos and set(equilibrios) != set(optimos):
+        print("El equilibrio de Nash NO coincide con el optimo de Pareto: "
+              "el resultado estable no es el socialmente mas eficiente.")
 
 
 # ---------------------------------------------------------------------------
@@ -675,6 +833,11 @@ def simular():
     brecha = utilidad_optima - utilidad_subasta
     print(f"\nBrecha subasta vs. optimo = {brecha:.3f} "
           f"({'igual al optimo' if brecha <= 1e-9 else 'subasta se queda corta'})")
+
+    # Bonus: negociacion y equilibrio de Nash
+    print("\n>>> Negociacion entre dos agentes: cooperar o no en una tarea compartida...")
+    juego = construir_caso_negociacion("A1", "A3")
+    imprimir_analisis_nash(sistema, juego)
 
     try:
         graficar_resultados(sistema, seleccion_lam, util_lam, J_lam,

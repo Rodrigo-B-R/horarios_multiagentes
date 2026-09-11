@@ -616,6 +616,84 @@ print(f"\\nJ optimo = {utilidad_opt:.2f}   J subasta = {utilidad_sub:.2f}   "
       f"({(utilidad_opt - utilidad_sub) / utilidad_opt:.1%} por debajo del optimo)")"""
 ))
 
+cells.append(nbf.v4.new_markdown_cell(
+"## 9. Negociacion y equilibrio de Nash\\n\\n"
+"Un tercer mecanismo de coordinacion, distinto al horario optimo (un solo "
+"planificador central) y a la subasta (un remate secuencial): aqui **no "
+"hay coordinador en absoluto**. Dos agentes deciden si `Cooperar` en una "
+"tarea compartida (repartirse la carga) o `No_cooperar` (dejarle todo al "
+"otro), cada uno anticipando lo que hara el otro. `JuegoDosAgentes` "
+"encuentra los equilibrios de Nash en estrategias puras (mejor respuesta "
+"mutua) y los optimos de Pareto, para contrastar **estabilidad** "
+"(Nash) contra **eficiencia social** (Pareto) -- no siempre coinciden."
+))
+
+cells.append(nbf.v4.new_code_cell(
+"""juego = hm.construir_caso_negociacion("A1", "A3")
+nombre1 = sistema.agentes[juego.agente1_id].nombre
+nombre2 = sistema.agentes[juego.agente2_id].nombre
+
+print("Matriz de pagos (U1, U2):")
+for e1 in juego.estrategias1:
+    fila = "  ".join(f"{e2}={juego.pagos[(e1, e2)]}" for e2 in juego.estrategias2)
+    print(f"  {e1}: {fila}")
+
+dom1 = juego.estrategia_dominante(1)
+dom2 = juego.estrategia_dominante(2)
+print(f"\\nEstrategia dominante de {nombre1}: {dom1 or 'ninguna'}")
+print(f"Estrategia dominante de {nombre2}: {dom2 or 'ninguna'}")
+
+equilibrios = juego.equilibrios_nash_puros()
+optimos = juego.optimos_pareto()
+print(f"Equilibrios de Nash (estrategias puras): {equilibrios}")
+print(f"Optimos de Pareto: {optimos}")
+
+if equilibrios and optimos and set(equilibrios) != set(optimos):
+    print("\\nEl equilibrio de Nash NO coincide con el optimo de Pareto: "
+          "el resultado estable no es el socialmente mas eficiente.")"""
+))
+
+cells.append(nbf.v4.new_markdown_cell(
+"### 9.1 Matriz de pagos\\n\\n"
+"Cada celda muestra (U1, U2). La celda resaltada en verde es el equilibrio "
+"de Nash: el unico resultado del que ningun agente quiere desviarse "
+"unilateralmente, aunque `(Cooperar, Cooperar)` -- en blanco, tambien "
+"Pareto-optimo -- sea mejor para ambos."
+))
+
+cells.append(nbf.v4.new_code_cell(
+"""COLOR_NASH = "tab:green"
+
+fig, ax = plt.subplots(figsize=(6, 5))
+n1, n2 = len(juego.estrategias1), len(juego.estrategias2)
+ax.set_xlim(0, n2)
+ax.set_ylim(0, n1)
+
+for i, e1 in enumerate(juego.estrategias1):
+    for j, e2 in enumerate(juego.estrategias2):
+        u1, u2 = juego.pagos[(e1, e2)]
+        y = n1 - 1 - i
+        es_nash = (e1, e2) in equilibrios
+        es_pareto = (e1, e2) in optimos
+        color = COLOR_NASH if es_nash else ("white" if es_pareto else "#dddddd")
+        ax.add_patch(plt.Rectangle((j, y), 1, 1, facecolor=color, edgecolor="black", linewidth=1.5))
+        marca = " (Nash)" if es_nash else ("" if es_pareto else " (dominado)")
+        ax.text(j + 0.5, y + 0.5, f"({u1:.0f}, {u2:.0f}){marca}", ha="center", va="center", fontsize=11)
+
+ax.set_xticks([j + 0.5 for j in range(n2)])
+ax.set_xticklabels(juego.estrategias2)
+ax.set_yticks([n1 - 1 - i + 0.5 for i in range(n1)])
+ax.set_yticklabels(juego.estrategias1)
+ax.set_xlabel(f"{nombre2} ({juego.agente2_id})")
+ax.set_ylabel(f"{nombre1} ({juego.agente1_id})")
+ax.set_title("Negociacion sobre tarea compartida: matriz de pagos")
+fig.tight_layout()
+ruta_nash = os.path.join(DIR_SALIDA, "nash_matriz_pagos.png")
+fig.savefig(ruta_nash, dpi=150)
+print(f"Grafico guardado en {ruta_nash}")
+plt.show()"""
+))
+
 nb['cells'] = cells
 nb['metadata'] = {
     "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
