@@ -31,6 +31,16 @@ plt.rcParams['animation.ffmpeg_path'] = imageio_ffmpeg.get_ffmpeg_exe()
 import horarios_multiagente as hm
 
 DIAS = hm.DIAS
+DIR_SALIDA = "representaciones_graficas"
+os.makedirs(DIR_SALIDA, exist_ok=True)
+
+# colores consistentes por metodo, para distinguir de un vistazo cual
+# mecanismo produjo cada grafico/animacion en todo el notebook
+COLOR_FUERZA_BRUTA = "tab:blue"     # seleccion optima por fuerza bruta (secciones 3, 6)
+COLOR_QLEARNING = "tab:orange"      # politica aprendida por Q-Learning (seccion 5, 7)
+COLOR_HUNGARO = "tab:green"         # asignacion optima centralizada (seccion 8)
+COLOR_SUBASTA = "tab:purple"        # subasta secuencial descentralizada (seccion 8)
+
 print("Modulo cargado:", hm.__file__)"""
 ))
 
@@ -147,18 +157,19 @@ cells.append(nbf.v4.new_code_cell(
 """episodios = np.arange(1, N_EPISODIOS + 1)
 
 fig, ax = plt.subplots(figsize=(9, 5))
-ax.plot(episodios, media, color="tab:blue", label="Q-Learning (media sobre 10 semillas)")
-ax.fill_between(episodios, media - desv, media + desv, color="tab:blue", alpha=0.2,
+ax.plot(episodios, media, color=COLOR_QLEARNING, label="Q-Learning (media sobre 10 semillas)")
+ax.fill_between(episodios, media - desv, media + desv, color=COLOR_QLEARNING, alpha=0.2,
                 label="+/- 1 desviacion estandar")
-ax.axhline(J_lam, color="tab:green", linestyle="--", label=f"Optimo (fuerza bruta) J={J_lam:.1f}")
+ax.axhline(J_lam, color=COLOR_FUERZA_BRUTA, linestyle="--", label=f"Optimo (fuerza bruta) J={J_lam:.1f}")
 ax.axhline(media_aleatorio, color="tab:red", linestyle=":", label=f"Linea base aleatoria J={media_aleatorio:.1f}")
 ax.set_xlabel("Episodio")
 ax.set_ylabel("J (utilidad social) del episodio")
 ax.set_title("Convergencia de Q-Learning en la seleccion de bloques")
 ax.legend()
 fig.tight_layout()
-fig.savefig("qlearning_convergencia.png", dpi=150)
-print("Grafico guardado en qlearning_convergencia.png")
+ruta_convergencia = os.path.join(DIR_SALIDA, "qlearning_convergencia.png")
+fig.savefig(ruta_convergencia, dpi=150)
+print(f"Grafico guardado en {ruta_convergencia}")
 plt.show()"""
 ))
 
@@ -209,8 +220,8 @@ ax.set_ylabel("|error TD| promedio (suavizado)")
 ax.set_title("(b) Que tanto se sigue \\"sorprendiendo\\" el agente")
 
 ax = axes[1, 0]
-ax.bar([str(s) for s in SEMILLAS], J_finales, color="tab:blue")
-ax.axhline(J_lam, color="tab:green", linestyle="--", label=f"Optimo J={J_lam:.1f}")
+ax.bar([str(s) for s in SEMILLAS], J_finales, color=COLOR_QLEARNING)
+ax.axhline(J_lam, color=COLOR_FUERZA_BRUTA, linestyle="--", label=f"Optimo J={J_lam:.1f}")
 ax.set_xlabel("Semilla")
 ax.set_ylabel("J de la politica final (greedy)")
 ax.set_title("(c) Variabilidad del resultado final entre semillas")
@@ -218,18 +229,19 @@ ax.legend()
 
 ax = axes[1, 1]
 desde = int(N_EPISODIOS * 0.8)
-ax.plot(episodios[desde:], media[desde:], color="tab:blue")
+ax.plot(episodios[desde:], media[desde:], color=COLOR_QLEARNING)
 ax.fill_between(episodios[desde:], (media - desv)[desde:], (media + desv)[desde:],
-                color="tab:blue", alpha=0.2)
-ax.axhline(J_lam, color="tab:green", linestyle="--")
+                color=COLOR_QLEARNING, alpha=0.2)
+ax.axhline(J_lam, color=COLOR_FUERZA_BRUTA, linestyle="--")
 ax.set_xlabel("Episodio")
 ax.set_ylabel("J")
 ax.set_title("(d) Zoom: ultimo 20% de episodios")
 
 fig.suptitle("Panel de diagnostico del entrenamiento de Q-Learning", fontsize=14)
 fig.tight_layout()
-fig.savefig("qlearning_panel_diagnostico.png", dpi=150)
-print("Grafico guardado en qlearning_panel_diagnostico.png")
+ruta_panel = os.path.join(DIR_SALIDA, "qlearning_panel_diagnostico.png")
+fig.savefig(ruta_panel, dpi=150)
+print(f"Grafico guardado en {ruta_panel}")
 plt.show()"""
 ))
 
@@ -260,10 +272,10 @@ def dibujar_frame(k):
     hasta = checkpoints[k]
     ep = episodios[:hasta]
 
-    ax_curva.plot(ep, media[:hasta], color="tab:blue", label="Q-Learning (media 10 semillas)")
+    ax_curva.plot(ep, media[:hasta], color=COLOR_QLEARNING, label="Q-Learning (media 10 semillas)")
     ax_curva.fill_between(ep, (media - desv)[:hasta], (media + desv)[:hasta],
-                           color="tab:blue", alpha=0.2, label="+/- 1 desv. estandar")
-    ax_curva.axhline(J_lam, color="tab:green", linestyle="--", label=f"Optimo J={J_lam:.1f}")
+                           color=COLOR_QLEARNING, alpha=0.2, label="+/- 1 desv. estandar")
+    ax_curva.axhline(J_lam, color=COLOR_FUERZA_BRUTA, linestyle="--", label=f"Optimo J={J_lam:.1f}")
     ax_curva.axhline(media_aleatorio, color="tab:red", linestyle=":", label=f"Aleatorio J={media_aleatorio:.1f}")
     ax_curva.set_xlim(0, N_EPISODIOS)
     ax_curva.set_ylim(y_min, y_max)
@@ -286,7 +298,7 @@ frames = list(range(n_frames)) + [n_frames - 1] * 10
 ani = animation.FuncAnimation(fig, dibujar_frame, frames=frames, interval=120, repeat=False)
 
 writer = animation.FFMpegWriter(fps=10, bitrate=1800)
-salida_entrenamiento_mp4 = "qlearning_entrenamiento.mp4"
+salida_entrenamiento_mp4 = os.path.join(DIR_SALIDA, "qlearning_entrenamiento.mp4")
 ani.save(salida_entrenamiento_mp4, writer=writer)
 plt.close(fig)
 print(f"Animacion guardada en {salida_entrenamiento_mp4}")"""
@@ -321,7 +333,7 @@ def dibujar_frame(k):
     util_parcial = sistema.utilidad_por_agente(parciales)
     valores = [util_parcial[a_id] for a_id in ids_agentes]
 
-    ax_bar.bar(nombres_agentes, valores, color="tab:blue")
+    ax_bar.bar(nombres_agentes, valores, color=COLOR_FUERZA_BRUTA)
     ax_bar.set_ylim(0, max(util_lam.values()) * 1.15)
     ax_bar.set_ylabel("Utilidad acumulada U_i")
     ax_bar.set_title(f"Bloques asignados: {k}/{len(orden)}")
@@ -345,7 +357,7 @@ frames = list(range(n_frames)) + [n_frames - 1] * 8
 ani = animation.FuncAnimation(fig, dibujar_frame, frames=frames, interval=600, repeat=False)
 
 writer = animation.FFMpegWriter(fps=2, bitrate=1800)
-salida_mp4 = "horario_simulacion.mp4"
+salida_mp4 = os.path.join(DIR_SALIDA, "horario_simulacion.mp4")
 ani.save(salida_mp4, writer=writer)
 plt.close(fig)
 print(f"Animacion guardada en {salida_mp4}")"""
@@ -380,7 +392,7 @@ def dibujar_frame(k):
     util_parcial = sistema.utilidad_por_agente(parciales)
     valores = [util_parcial[a_id] for a_id in ids_agentes]
 
-    ax_bar.bar(nombres_agentes, valores, color="tab:orange")
+    ax_bar.bar(nombres_agentes, valores, color=COLOR_QLEARNING)
     ax_bar.set_ylim(0, techo_util)
     ax_bar.set_ylabel("Utilidad acumulada U_i")
     ax_bar.set_title(f"Bloques asignados: {k}/{len(orden_ql)}")
@@ -403,7 +415,7 @@ frames = list(range(n_frames)) + [n_frames - 1] * 8
 ani = animation.FuncAnimation(fig, dibujar_frame, frames=frames, interval=600, repeat=False)
 
 writer = animation.FFMpegWriter(fps=2, bitrate=1800)
-salida_ql_mp4 = "horario_qlearning.mp4"
+salida_ql_mp4 = os.path.join(DIR_SALIDA, "horario_qlearning.mp4")
 ani.save(salida_ql_mp4, writer=writer)
 plt.close(fig)
 print(f"Animacion guardada en {salida_ql_mp4}")"""
@@ -427,6 +439,181 @@ print(f"Solo en Q-Learning:                {sorted(ids_ql - ids_lam)}")
 print(f"En ambos:                          {sorted(ids_lam & ids_ql)}")
 print(f"\\nJ optimo = {J_lam:.2f}   J Q-Learning = {J_ql:.2f}   "
       f"brecha = {J_lam - J_ql:.2f} ({(J_lam - J_ql) / J_lam:.1%} por debajo del optimo)")"""
+))
+
+cells.append(nbf.v4.new_markdown_cell(
+"## 8. Coordinacion por subasta: asignacion optima agente-tarea (Ejercicio 4)\\n\\n"
+"Problema distinto al horario: en vez de elegir que subconjunto de bloques "
+"*compartidos* entra al calendario, aqui cada **tarea** (p.ej. una entrega) "
+"se le asigna a un solo **agente responsable**, y cada agente toma como "
+"maximo una tarea -- el clasico *problema de asignacion*. Se resuelve de "
+"dos formas, para comparar coordinacion centralizada vs. descentralizada:\\n\\n"
+"- **`asignar_optimo()`**: algoritmo **hungaro** (Kuhn-Munkres) sobre la "
+"matriz de utilidades agente x tarea -- el optimo global, requiere ver el "
+"problema completo.\\n"
+"- **`asignar_por_subasta()`**: **subasta secuencial** -- las tareas se "
+"rematan una por una y se las lleva quien puje mas alto (su propia "
+"utilidad); ningun agente ve el problema completo."
+))
+
+cells.append(nbf.v4.new_code_cell(
+"""tareas = hm.construir_caso_asignacion(agentes)
+asignador = hm.AsignadorSubasta(agentes, tareas)
+
+asignacion_opt, utilidad_opt = asignador.asignar_optimo()
+orden_subasta = [t.id for t in tareas]
+asignacion_sub, utilidad_sub = asignador.asignar_por_subasta(orden=orden_subasta, semilla=0)
+
+print("=== Asignacion optima (algoritmo hungaro, centralizado) ===")
+for a_id, t_id in sorted(asignacion_opt.items()):
+    print(f"  {sistema.agentes[a_id].nombre} ({a_id}) -> {t_id}")
+print(f"Utilidad total = {utilidad_opt:.2f}\\n")
+
+print("=== Asignacion por subasta secuencial (descentralizado) ===")
+for a_id, t_id in sorted(asignacion_sub.items()):
+    print(f"  {sistema.agentes[a_id].nombre} ({a_id}) -> {t_id}")
+print(f"Utilidad total = {utilidad_sub:.2f}\\n")
+
+print(f"Brecha subasta vs. optimo = {utilidad_opt - utilidad_sub:.2f}")"""
+))
+
+cells.append(nbf.v4.new_markdown_cell(
+"### 8.1 Comparacion de utilidad por agente\\n\\n"
+"Utilidad que obtiene cada agente con la tarea que le toco, optimo (verde) "
+"vs subasta (morado) -- colores usados en el resto de esta seccion para "
+"distinguirla de la seccion 3/6 (fuerza bruta, azul) y de la seccion 5/7 "
+"(Q-Learning, naranja)."
+))
+
+cells.append(nbf.v4.new_code_cell(
+"""ids_agentes_asig = list(sistema.agentes.keys())
+nombres_asig = [sistema.agentes[a_id].nombre for a_id in ids_agentes_asig]
+tareas_por_id = {t.id: t for t in tareas}
+
+def utilidad_por_agente_asignacion(asignacion):
+    resultado = {a_id: 0.0 for a_id in ids_agentes_asig}
+    for a_id, t_id in asignacion.items():
+        resultado[a_id] = sistema.agentes[a_id].calcular_utilidad(tareas_por_id[t_id])
+    return resultado
+
+util_opt_agente = utilidad_por_agente_asignacion(asignacion_opt)
+util_sub_agente = utilidad_por_agente_asignacion(asignacion_sub)
+
+fig, ax = plt.subplots(figsize=(8, 5))
+x = range(len(ids_agentes_asig))
+ancho = 0.35
+ax.bar([i - ancho / 2 for i in x], [util_opt_agente[a] for a in ids_agentes_asig],
+       width=ancho, color=COLOR_HUNGARO, label=f"Optimo (hungaro) J={utilidad_opt:.1f}")
+ax.bar([i + ancho / 2 for i in x], [util_sub_agente[a] for a in ids_agentes_asig],
+       width=ancho, color=COLOR_SUBASTA, label=f"Subasta secuencial J={utilidad_sub:.1f}")
+ax.set_xticks(list(x))
+ax.set_xticklabels(nombres_asig)
+ax.set_ylabel("Utilidad de la tarea asignada")
+ax.set_title("Asignacion optima (hungaro) vs. subasta secuencial (descentralizada)")
+ax.legend()
+fig.tight_layout()
+ruta_subasta_comp = os.path.join(DIR_SALIDA, "subasta_comparacion.png")
+fig.savefig(ruta_subasta_comp, dpi=150)
+print(f"Grafico guardado en {ruta_subasta_comp}")
+plt.show()"""
+))
+
+cells.append(nbf.v4.new_markdown_cell(
+"### 8.2 Animacion de la subasta secuencial\\n\\n"
+"Se anima el remate ronda a ronda: en cada cuadro se resuelve una tarea "
+"mas (gana quien puje mas alto) y se actualiza tanto la utilidad ganada "
+"por cada agente como el acumulado total, comparado contra la linea "
+"punteada del optimo centralizado (hungaro). Se guarda como "
+"`subasta_secuencial.mp4`."
+))
+
+cells.append(nbf.v4.new_code_cell(
+"""libres = {a.id: a for a in agentes}
+historial_rondas = []  # (tarea_id, ganador_id o None, puja, utilidad_acumulada)
+acumulado = 0.0
+for tarea_id in orden_subasta:
+    tarea = tareas_por_id[tarea_id]
+    pujas = sorted(
+        ((a.calcular_utilidad(tarea), a.id) for a in libres.values() if a.id in tarea.participantes),
+        key=lambda pu: (-pu[0], pu[1]),
+    )
+    if pujas and pujas[0][0] > 0:
+        mejor_puja, ganador_id = pujas[0]
+        acumulado += mejor_puja
+        del libres[ganador_id]
+        historial_rondas.append((tarea_id, ganador_id, mejor_puja, acumulado))
+    else:
+        historial_rondas.append((tarea_id, None, 0.0, acumulado))
+
+fig, (ax_bar, ax_total) = plt.subplots(1, 2, figsize=(13, 5))
+fig.suptitle("Subasta secuencial: remate de tareas una por una")
+
+def dibujar_frame(k):
+    ax_bar.clear()
+    ax_total.clear()
+
+    utils_parciales = {a_id: 0.0 for a_id in ids_agentes_asig}
+    for tarea_id, ganador_id, puja, _ in historial_rondas[:k]:
+        if ganador_id is not None:
+            utils_parciales[ganador_id] = puja
+
+    valores = [utils_parciales[a_id] for a_id in ids_agentes_asig]
+    ax_bar.bar(nombres_asig, valores, color=COLOR_SUBASTA)
+    ax_bar.set_ylim(0, max(util_opt_agente.values()) * 1.3)
+    ax_bar.set_ylabel("Utilidad de la tarea ganada")
+    if k == 0:
+        titulo_ronda = "Antes de empezar"
+    else:
+        tarea_id, ganador_id, puja, _ = historial_rondas[k - 1]
+        nombre_ganador = sistema.agentes[ganador_id].nombre if ganador_id else "nadie (puja <= 0)"
+        titulo_ronda = f"Remate {k}/{len(historial_rondas)}: {tarea_id} -> {nombre_ganador}"
+    ax_bar.set_title(titulo_ronda)
+
+    rondas_x = list(range(len(historial_rondas) + 1))
+    acumulados = [0.0] + [r[3] for r in historial_rondas]
+    ax_total.plot(rondas_x[:k + 1], acumulados[:k + 1], color=COLOR_SUBASTA, marker="o",
+                  label="Subasta (acumulado)")
+    ax_total.axhline(utilidad_opt, color=COLOR_HUNGARO, linestyle="--",
+                      label=f"Optimo (hungaro) J={utilidad_opt:.1f}")
+    ax_total.set_xlim(0, len(historial_rondas))
+    ax_total.set_ylim(0, utilidad_opt * 1.15)
+    ax_total.set_xlabel("Ronda de remate")
+    ax_total.set_ylabel("Utilidad total acumulada")
+    ax_total.set_title("Utilidad total: subasta vs. optimo centralizado")
+    ax_total.legend(loc="lower right")
+
+n_frames = len(historial_rondas) + 1
+frames = list(range(n_frames)) + [n_frames - 1] * 8
+
+ani = animation.FuncAnimation(fig, dibujar_frame, frames=frames, interval=700, repeat=False)
+
+writer = animation.FFMpegWriter(fps=2, bitrate=1800)
+salida_subasta_mp4 = os.path.join(DIR_SALIDA, "subasta_secuencial.mp4")
+ani.save(salida_subasta_mp4, writer=writer)
+plt.close(fig)
+print(f"Animacion guardada en {salida_subasta_mp4}")"""
+))
+
+cells.append(nbf.v4.new_code_cell(
+"""Video(salida_subasta_mp4, embed=True, width=900)"""
+))
+
+cells.append(nbf.v4.new_markdown_cell(
+"### 8.3 Diferencia entre ambas asignaciones\\n\\n"
+"En que agentes coincide la tarea asignada, y en cuales no."
+))
+
+cells.append(nbf.v4.new_code_cell(
+"""comunes = [a_id for a_id in ids_agentes_asig
+           if a_id in asignacion_opt and asignacion_opt.get(a_id) == asignacion_sub.get(a_id)]
+print(f"Agentes con la misma tarea en ambos mecanismos: {sorted(comunes)}")
+for a_id in ids_agentes_asig:
+    if a_id not in comunes:
+        print(f"  {sistema.agentes[a_id].nombre}: optimo={asignacion_opt.get(a_id, '-')}  "
+              f"subasta={asignacion_sub.get(a_id, '-')}")
+print(f"\\nJ optimo = {utilidad_opt:.2f}   J subasta = {utilidad_sub:.2f}   "
+      f"brecha = {utilidad_opt - utilidad_sub:.2f} "
+      f"({(utilidad_opt - utilidad_sub) / utilidad_opt:.1%} por debajo del optimo)")"""
 ))
 
 nb['cells'] = cells

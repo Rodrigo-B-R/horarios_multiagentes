@@ -337,6 +337,165 @@ class QLearningPlanner:
 
 
 # ---------------------------------------------------------------------------
+# Coordinacion por subasta: asignacion optima agente-tarea (Ejercicio 4)
+# ---------------------------------------------------------------------------
+
+class AsignadorSubasta:
+    """Resuelve un problema de asignacion uno-a-uno entre agentes y tareas
+    (p.ej. "quien entrega cada paquete", "quien se hace cargo de cada
+    tramite"): cada tarea se le da a un solo agente candidato (de
+    tarea.participantes) y cada agente toma como maximo una tarea.
+
+    Es un problema distinto al de SistemaMultiagente.seleccionar_optimo (que
+    decide que subconjunto de bloques *compartidos* entra al horario). Aqui
+    se resuelve de dos formas, para comparar coordinacion centralizada vs.
+    descentralizada:
+
+      1. asignar_optimo(): algoritmo hungaro (Kuhn-Munkres) sobre la matriz
+         de utilidades agente x tarea -- el optimo global, requiere ver el
+         problema completo.
+      2. asignar_por_subasta(): subasta secuencial -- las tareas se rematan
+         una por una y se las lleva quien puje mas alto (su propia utilidad),
+         sin que ningun agente necesite ver el problema completo.
+    """
+
+    def __init__(self, agentes: List[Agente], tareas: List[Bloque]):
+        self.agentes = agentes
+        self.tareas = tareas
+
+    def matriz_utilidad(self) -> Dict[Tuple[str, str], float]:
+        """Utilidad de cada agente por cada tarea (-inf si no es candidato)."""
+        return {
+            (a.id, t.id): a.calcular_utilidad(t) if a.id in t.participantes else float("-inf")
+            for t in self.tareas
+            for a in self.agentes
+        }
+
+    # -- optimo centralizado: algoritmo hungaro -----------------------
+
+    def asignar_optimo(self) -> Tuple[Dict[str, str], float]:
+        """Algoritmo hungaro (Kuhn-Munkres, O(n^3)) para maximizar la
+        utilidad total de la asignacion agente->tarea. Devuelve
+        {agente_id: tarea_id} y la utilidad total. Agentes/tareas sin
+        contraparte candidata factible quedan sin asignar."""
+        agentes, tareas = self.agentes, self.tareas
+        n, m = len(agentes), len(tareas)
+        dim = max(n, m, 1)
+
+        CARO = 1e6  # penaliza asignaciones invalidas (agente no candidato)
+        costo = [[CARO] * dim for _ in range(dim)]
+        for i, a in enumerate(agentes):
+            for j, t in enumerate(tareas):
+                if a.id in t.participantes:
+                    costo[i][j] = -a.calcular_utilidad(t)  # minimizar costo = maximizar utilidad
+        for i in range(n, dim):
+            costo[i] = [0.0] * dim
+        for j in range(m, dim):
+            for i in range(dim):
+                costo[i][j] = 0.0
+
+        asignacion = _hungaro(costo)
+
+        resultado: Dict[str, str] = {}
+        utilidad_total = 0.0
+        for i, j in enumerate(asignacion):
+            if i < n and j < m and agentes[i].id in tareas[j].participantes:
+                resultado[agentes[i].id] = tareas[j].id
+                utilidad_total += agentes[i].calcular_utilidad(tareas[j])
+        return resultado, utilidad_total
+
+    # -- coordinacion descentralizada: subasta secuencial --------------
+
+    def asignar_por_subasta(self, orden: Optional[List[str]] = None,
+                             semilla: Optional[int] = None) -> Tuple[Dict[str, str], float]:
+        """Subasta secuencial: las tareas se rematan una por una (en `orden`,
+        o en orden aleatorio si no se da). En cada remate, cada agente aun
+        libre puja su propia utilidad por esa tarea (puja veraz) y gana quien
+        puje mas alto (empates: el id de agente mas chico). Mecanismo
+        descentralizado: ningun agente ve el problema completo, solo su
+        propia utilidad por la tarea que se esta rematando."""
+        rng = random.Random(semilla)
+        tareas_por_id = {t.id: t for t in self.tareas}
+        orden = list(orden) if orden is not None else list(tareas_por_id.keys())
+        if orden is None:
+            rng.shuffle(orden)
+
+        libres = {a.id: a for a in self.agentes}
+        resultado: Dict[str, str] = {}
+        utilidad_total = 0.0
+
+        for tarea_id in orden:
+            tarea = tareas_por_id[tarea_id]
+            pujas = sorted(
+                ((a.calcular_utilidad(tarea), a.id) for a in libres.values()
+                 if a.id in tarea.participantes),
+                key=lambda pu: (-pu[0], pu[1]),
+            )
+            if not pujas:
+                continue
+            mejor_puja, ganador_id = pujas[0]
+            if mejor_puja <= 0:
+                continue  # nadie quiere la tarea a utilidad positiva: se queda sin asignar
+            resultado[ganador_id] = tarea_id
+            utilidad_total += mejor_puja
+            del libres[ganador_id]
+
+        return resultado, utilidad_total
+
+
+def _hungaro(costo: List[List[float]]) -> List[int]:
+    """Algoritmo hungaro (Kuhn-Munkres) O(n^3) sobre una matriz de costo
+    cuadrada, via potenciales (metodo de Jonker-Volgenant simplificado), sin
+    dependencias externas. Devuelve, para cada fila i, la columna asignada
+    que minimiza el costo total."""
+    n = len(costo)
+    INF = float("inf")
+    u = [0.0] * (n + 1)
+    v = [0.0] * (n + 1)
+    p = [0] * (n + 1)   # p[j] = fila (1-indexada) asignada a la columna j
+    way = [0] * (n + 1)
+
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0
+        minv = [INF] * (n + 1)
+        used = [False] * (n + 1)
+        while True:
+            used[j0] = True
+            i0 = p[j0]
+            delta = INF
+            j1 = -1
+            for j in range(1, n + 1):
+                if not used[j]:
+                    cur = costo[i0 - 1][j - 1] - u[i0] - v[j]
+                    if cur < minv[j]:
+                        minv[j] = cur
+                        way[j] = j0
+                    if minv[j] < delta:
+                        delta = minv[j]
+                        j1 = j
+            for j in range(n + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while j0:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+
+    asignacion_por_fila = [0] * n
+    for j in range(1, n + 1):
+        if p[j] != 0:
+            asignacion_por_fila[p[j] - 1] = j - 1
+    return asignacion_por_fila
+
+
+# ---------------------------------------------------------------------------
 # Simulacion de ejemplo
 # ---------------------------------------------------------------------------
 
@@ -376,6 +535,35 @@ def construir_caso_ejemplo() -> Tuple[List[Agente], List[Bloque]]:
     ]
 
     return agentes, bloques
+
+
+def construir_caso_asignacion(agentes: List[Agente]) -> List[Bloque]:
+    """Tareas de reparto (una por agente responsable) para demostrar
+    coordinacion por subasta / asignacion optima (Ejercicio 4)."""
+    return [
+        Bloque("T1", "Entrega paquete Norte", dia=0, inicio=9, fin=10,
+               participantes=["A1", "A3", "A4"], prioridad_base=4, beneficio_base=4),
+        Bloque("T2", "Entrega paquete Centro", dia=0, inicio=9, fin=9.5,
+               participantes=["A1", "A2", "A3"], prioridad_base=3, beneficio_base=5),
+        Bloque("T3", "Soporte cliente urgente", dia=0, inicio=11, fin=12,
+               participantes=["A2", "A3", "A4"], prioridad_base=5, beneficio_base=3),
+        Bloque("T4", "Inventario bodega", dia=0, inicio=14, fin=16,
+               participantes=["A1", "A4"], prioridad_base=2, beneficio_base=2),
+        Bloque("T5", "Ruta de recoleccion Sur", dia=1, inicio=9, fin=11,
+               participantes=["A2", "A3", "A4"], prioridad_base=3, beneficio_base=4),
+    ]
+
+
+def imprimir_asignacion(agentes: List[Agente], titulo: str,
+                         asignacion: Dict[str, str], utilidad_total: float) -> None:
+    nombres = {a.id: a.nombre for a in agentes}
+    print(f"\n=== {titulo} ===")
+    print(f"Utilidad total = {utilidad_total:.3f}")
+    if not asignacion:
+        print("  (sin asignaciones)")
+        return
+    for a_id, t_id in sorted(asignacion.items()):
+        print(f"  - {nombres[a_id]} ({a_id}) -> {t_id}")
 
 
 def imprimir_seleccion(sistema: SistemaMultiagente, titulo: str,
@@ -470,6 +658,23 @@ def simular():
     imprimir_seleccion(sistema, "Politica aprendida por Q-Learning", seleccion_ql, J_ql, util_ql)
     print(f"J promedio ultimos 200 episodios de entrenamiento: "
           f"{statistics.fmean(historial[-200:]):.3f}  (optimo por fuerza bruta: {J_lam:.3f})")
+
+    # Bonus: coordinacion por subasta / asignacion optima (Ejercicio 4)
+    print("\n>>> Asignacion optima agente-tarea via subasta (algoritmo hungaro vs. subasta secuencial)...")
+    tareas = construir_caso_asignacion(agentes)
+    asignador = AsignadorSubasta(agentes, tareas)
+
+    asignacion_optima, utilidad_optima = asignador.asignar_optimo()
+    imprimir_asignacion(agentes, "Asignacion optima (algoritmo hungaro, centralizado)",
+                         asignacion_optima, utilidad_optima)
+
+    asignacion_subasta, utilidad_subasta = asignador.asignar_por_subasta(semilla=0)
+    imprimir_asignacion(agentes, "Asignacion por subasta secuencial (descentralizado)",
+                         asignacion_subasta, utilidad_subasta)
+
+    brecha = utilidad_optima - utilidad_subasta
+    print(f"\nBrecha subasta vs. optimo = {brecha:.3f} "
+          f"({'igual al optimo' if brecha <= 1e-9 else 'subasta se queda corta'})")
 
     try:
         graficar_resultados(sistema, seleccion_lam, util_lam, J_lam,
