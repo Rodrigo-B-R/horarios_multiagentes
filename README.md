@@ -1,5 +1,7 @@
 # Como correr el proyecto (en orden)
 
+Profe, puede correr simplemente horarios_simulacion.ipynb y demostracion_cientifica.ipynb.
+
 Este proyecto se construyo en capas: cada paso agrega un mecanismo de
 coordinacion nuevo sobre el mismo caso base (4 agentes, 8 bloques de
 horario). Correr los pasos en este orden es la forma mas facil de entender
